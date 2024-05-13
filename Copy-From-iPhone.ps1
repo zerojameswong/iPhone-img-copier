@@ -20,13 +20,7 @@ if ($internalStorage -eq $null) {
     return
 }
 
-$dcim = $internalStorage.GetFolder.Items() | Where-Object Name -eq "DCIM"
-if ($dcim -eq $null) {
-    Write-Error "DCIM not found"
-    return
-}
-
-$newFolderCount = $dcim.GetFolder.Items().Count
+$newFolderCount = $internalStorage.GetFolder.Items().Count
 if ($newFolderCount -eq 0) {
     Write-Error "No folders found"
     return
@@ -53,7 +47,7 @@ $folderProgressParameters = @{
     Id               = 0
     Status           = 'Folders Progress->'
 }
-foreach($sourceFolder in $dcim.GetFolder.Items()) {
+foreach($sourceFolder in $internalStorage.GetFolder.Items()) {
     $newFolderName = $sourceFolder.Name
 
     if ($completed[$newFolderName]) {
