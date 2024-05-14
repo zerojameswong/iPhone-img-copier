@@ -20,12 +20,12 @@ if ($internalStorage -eq $null) {
     return
 }
 
-$newFolderCount = $internalStorage.GetFolder.Items().Count
+$sourceFolders = $internalStorage.GetFolder.Items()
+$newFolderCount = $sourceFolders.Count
 if ($newFolderCount -eq 0) {
     Write-Error "No folders found"
     return
 }
-
 
 if (-Not (Test-Path $destPath)) {
     New-Item $destPath -ItemType Directory
@@ -33,12 +33,11 @@ if (-Not (Test-Path $destPath)) {
 $destShellApplication = New-Object -com Shell.Application
 $destNameSpace = $destShellApplication.NameSpace($destPath)
 
-$completedFilePath = Join-Path $destPath ".completed"
-$completed = @{}
-if (Test-Path $completedFilePath) {
-    Get-Content $completedFilePath | ForEach-Object {
-        $completed[$_] = $true
-    }
+$statusFilePath = Join-Path $destPath "status.csv"
+if (Test-Path $statusFilePath) {
+    $statusObjects = Import-Csv -Path $statusFilePath
+} else {
+    $statusObjects = @()
 }
 
 $folderCounter = 0
@@ -47,50 +46,88 @@ $folderProgressParameters = @{
     Id               = 0
     Status           = 'Folders Progress->'
 }
-foreach($sourceFolder in $internalStorage.GetFolder.Items()) {
+foreach($sourceFolder in $sourceFolders) {
     $newFolderName = $sourceFolder.Name
 
-    if ($completed[$newFolderName]) {
+    $statusObject = $statusObjects | Where-Object { $_.FolderName -eq $newFolderName }
+
+    if ($statusObject.AllSuccess) {
         $folderCounter++
         $folderProgressParameters.CurrentOperation = "Skipped $newFolderName"
-        $folderProgressParameters.PercentComplete  = $folderCounter / $newFolderCount * 100
+        $folderProgressParameters.PercentComplete = $folderCounter / $newFolderCount * 100
         Write-Progress @folderProgressParameters
         continue
     } else {
         $folderProgressParameters.CurrentOperation = "Copying $newFolderName"
-        $folderProgressParameters.PercentComplete  = $folderCounter / $newFolderCount * 100
+        $folderProgressParameters.PercentComplete = $folderCounter / $newFolderCount * 100
         Write-Progress @folderProgressParameters
     }
 
     $destNameSpace.NewFolder($newFolderName)
     # creation method was void
     $newFolder = $destNameSpace.Items() | Where-Object Name -eq $newFolderName
+    Write-Output $newFolder.Path
 
     $itemCount = $sourceFolder.GetFolder.Items().Count
     $itemCounter = 0
-    foreach ($item in $sourceFolder.GetFolder.Items()) {
+    $numSuccess = 0
+    $numError = 0
+    $numDuplicate = 0
+
+    if ($itemCount -eq 0) {
+        Write-Output "$newFolderName with 0 item count"
+    }
+
+    $items = $sourceFolder.GetFolder.Items()
+    foreach ($item in $items) {
         $itemName = $item.Name
 
         $newItemPath = Join-Path $newFolder.Path $itemName
         if (-Not (Test-Path $newItemPath)) {
-            # flag doesnt work for some reason
-            $newFolder.GetFolder.CopyHere($item, 0x14)
+            try {
+                # flag doesnt work for some reason
+                $newFolder.GetFolder.CopyHere($item, 0x14)
+                $numSuccess++
+            } catch [Exception]{
+                $numError++
+                Write-Output "$newFolderName/$itemName error-ed out"
+            }
+        } else {
+            $numDuplicate++
         }
 
         $itemCounter++
+        if ($itemCount -eq 0) {
+            $pctComplete = 99
+        } else {
+            $pctComplete = $itemCounter / $itemCount * 100
+        }
+
         $itemProgressParameters = @{
             Activity         = 'Items'
             CurrentOperation = $itemName
             Id               = 1
             ParentId         = 0
-            PercentComplete  = $itemCounter / $itemCount * 100
+            PercentComplete  = $pctComplete
             Status           = 'Items Progress->'
         }
         Write-Progress @itemProgressParameters
     }
 
+    $statusRecord = [PSCustomObject]@{
+        Date = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        FolderName = $sourceFolder.Name
+        NumTotal = $itemCount
+        NumSuccess = $numSuccess
+        NumError = $numError
+        NumDuplicate = $numDuplicate
+        AnyDuplicate = $numDuplicate -gt 0
+        AnyError = $numError -gt 0
+        AllSuccess = $numSuccess -eq $itemCount
+    }
+
     $folderCounter++
-    Add-Content -path $completedFilePath -value $newFolderName
+    $statusRecord | Export-Csv -Path $statusFilePath -Append -NoTypeInformation
 }
 
 $folderProgressParameters.CurrentOperation = "Done"
